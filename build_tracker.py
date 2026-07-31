@@ -111,8 +111,12 @@ def build_site_data(gen, goals):
             nat[y] = {'f': round(fos / tot * 1000) / 10, 'r': round(ren / tot * 1000) / 10, 'n': round(nuc / tot * 1000) / 10}
 
     last_data_year = int(years_all[-1])
+    # EIA has historically released this workbook in September, covering the
+    # prior calendar year, with the following year's edition around October.
+    released = f"September {last_data_year + 1}"
+    next_release = f"October {last_data_year + 2}"
     return {
-        'meta': {'lastDataYear': last_data_year,
+        'meta': {'lastDataYear': last_data_year, 'released': released, 'nextRelease': next_release,
                  'source': 'EIA, Net Generation by State by Type of Producer by Energy Source (1990–present)'},
         'national': nat,
         'states': combined,
