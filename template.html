@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State Power Transition Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gridjs@5.0.2/dist/gridjs.umd.js" integrity="sha384-/XXDzxe4FsGiAe50i/u9pY/Vy/uX654MHB1xoc1BJNnH1WXHhqHga9g3q5tF4gj7" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridjs@5.0.2/dist/theme/mermaid.min.css">
+<style>
+:root{
+  color-scheme: light;
+  --fossil:#c25b3c; --fossil-bg:#fbeae4;
+  --renew:#2f8f5b; --renew-bg:#e5f4ec;
+  --nuke:#6b7280; --nuke-bg:#eef0f2;
+  --ink:#1f2d3d; --muted:#5b6472; --line:#e2e6ea; --bg:#ffffff; --panel:#f8f9fb;
+  --accent:#2b6cb0;
+  --g100:#1f7a4d; --gpartial:#2b6cb0; --gvol:#a67c2e; --gnone:#8a8f98;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-0.01em}
+.sub{color:var(--muted);margin:0 0 18px;max-width:760px}
+.freshness{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:5px 12px;margin-bottom:22px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--renew)}
+.overview{border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:26px;background:var(--panel)}
+.overview h2{margin:0 0 4px;font-size:15px}
+.overview p{margin:0 0 12px;color:var(--muted);font-size:13px}
+.chartbox{position:relative;height:220px}
+.legend-row{display:flex;gap:18px;margin-top:10px;font-size:12px;color:var(--muted)}
+.legend-row span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;color:var(--ink)}
+.tab.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:18px}
+.controls input[type=text]{padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;width:200px}
+.controls select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:#fff}
+.chip{border:1px solid var(--line);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;background:#fff;color:var(--muted)}
+.chip.on{color:#fff}
+.chip[data-lvl="mandatory-100"].on{background:var(--g100);border-color:var(--g100)}
+.chip[data-lvl="mandatory-partial"].on{background:var(--gpartial);border-color:var(--gpartial)}
+.chip[data-lvl="voluntary"].on{background:var(--gvol);border-color:var(--gvol)}
+.chip[data-lvl="none"].on{background:var(--gnone);border-color:var(--gnone)}
+.count{font-size:12px;color:var(--muted);margin-left:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:14px}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+.card-top h3{margin:0;font-size:15px}
+.code{font-size:11px;color:var(--muted)}
+.badge{font-size:10.5px;padding:3px 8px;border-radius:20px;font-weight:600;white-space:nowrap;color:#fff}
+.badge.mandatory-100{background:var(--g100)}
+.badge.mandatory-partial{background:var(--gpartial)}
+.badge.voluntary{background:var(--gvol)}
+.badge.none{background:var(--gnone)}
+.card .chartbox{height:90px;margin:8px 0}
+.stats{display:flex;gap:10px;font-size:12px;margin:6px 0}
+.stat b{display:block;font-size:15px}
+.stat.fossil b{color:var(--fossil)}
+.stat.renew b{color:var(--renew)}
+.delta{font-size:11px;color:var(--muted);margin-bottom:8px}
+.delta b.up{color:var(--renew)}
+.delta b.down{color:var(--fossil)}
+.goal-txt{font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
+#rankings{display:none}
+#gridjs-host{font-size:13px}
+.lvl-pill{font-size:10.5px;padding:2px 8px;border-radius:20px;color:#fff;font-weight:600}
+footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+footer p{margin:4px 0}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>State Power Transition Tracker</h1>
+  <p class="sub">Every state's electricity generation mix, fossil share declining against renewable share rising, paired with each state's carbon or clean-energy goal status.</p>
+  <div class="freshness"><span class="dot"></span><span id="freshtext">loading…</span></div>
+
+  <div class="overview">
+    <h2>United States — generation-weighted national mix</h2>
+    <p>Fossil (coal, natural gas, petroleum, other gases) vs. renewable (wind, solar, hydro, geothermal, biomass) vs. nuclear share of total U.S. electricity generation.</p>
+    <div class="chartbox"><canvas id="natChart"></canvas></div>
+    <div class="legend-row">
+      <span><i class="sw" style="background:var(--fossil)"></i>Fossil</span>
+      <span><i class="sw" style="background:var(--renew)"></i>Renewable</span>
+      <span><i class="sw" style="background:var(--nuke)"></i>Nuclear</span>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="gallery">Gallery</div>
+    <div class="tab" data-tab="rankings">Rankings</div>
+  </div>
+
+  <div class="controls">
+    <input type="text" id="search" placeholder="Search state…">
+    <select id="sort">
+      <option value="renew_desc">Sort: Renewable share (highest)</option>
+      <option value="renew_change_desc">Sort: Renewable growth, 10yr (fastest)</option>
+      <option value="fossil_change_desc">Sort: Fossil decline, 10yr (steepest)</option>
+      <option value="fossil_desc">Sort: Fossil share (highest)</option>
+      <option value="az">Sort: A–Z</option>
+    </select>
+    <div class="chip on" data-lvl="mandatory-100">100% mandate</div>
+    <div class="chip on" data-lvl="mandatory-partial">Partial RPS/CES</div>
+    <div class="chip on" data-lvl="voluntary">Voluntary goal</div>
+    <div class="chip on" data-lvl="none">No goal</div>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div id="gallery" class="grid"></div>
+  <div id="rankings"><div id="gridjs-host"></div></div>
+
+  <footer>
+    <p><b>Generation data:</b> U.S. Energy Information Administration, Net Generation by State by Type of Producer by Energy Source, 1990–2024 (Total Electric Power Industry). Released September 2025; next EIA release expected October 2026. Fossil = coal, natural gas, petroleum, other gases. Renewable = conventional hydroelectric, wind, solar thermal/PV, geothermal, wood and other biomass. Nuclear tracked separately as carbon-free but not renewable.</p>
+    <p><b>Goal status:</b> compiled from NCSL's state RPS/CES brief and state statutes; cross-checked against DSIRE and Environment America's 100%-clean-electricity tracking as of mid-2026. "Mandatory 100%" = a binding statute requiring 100% renewable or carbon-free electricity by a stated year. "Partial RPS/CES" = a binding standard below 100%. "Voluntary goal" = a stated but non-binding target. "No goal" = no RPS, CES, or clean-energy goal currently in statute.</p>
+    <p id="genline">Page generated —</p>
+  </footer>
+</div>
+
+<script>
+const DATA = __DATA_JSON__;
+const LEVEL_LABEL = {'mandatory-100':'100% mandate','mandatory-partial':'Partial RPS/CES','voluntary':'Voluntary goal','none':'No goal'};
+
+document.getElementById('freshtext').textContent =
+  `EIA data through ${DATA.meta.lastDataYear} (released ${DATA.meta.released}; next release ${DATA.meta.nextRelease})`;
+document.getElementById('genline').textContent =
+  `Page generated ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}. This page refreshes on a recurring schedule as new EIA data and state legislative changes become available.`;
+
+// ---------- national overview chart ----------
+const natYears = Object.keys(DATA.national).sort((a,b)=>a-b);
+new Chart(document.getElementById('natChart'), {
+  type:'line',
+  data:{
+    labels: natYears,
+    datasets:[
+      {label:'Fossil', data: natYears.map(y=>DATA.national[y].f), borderColor:'#c25b3c', backgroundColor:'#c25b3c22', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
+      {label:'Renewable', data: natYears.map(y=>DATA.national[y].r), borderColor:'#2f8f5b', backgroundColor:'#2f8f5b22', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
+      {label:'Nuclear', data: natYears.map(y=>DATA.national[y].n), borderColor:'#6b7280', backgroundColor:'#6b728022', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
+    ]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y}%`}}},
+    scales:{ y:{min:0, max:70, ticks:{callback:v=>v+'%'}}, x:{ticks:{maxRotation:0, autoSkip:true, maxTicksLimit:10}} }
+  }
+});
+
+// ---------- build state list ----------
+const codes = Object.keys(DATA.states);
+const cardCharts = {};
+
+function stateRow(code){
+  const s = DATA.states[code];
+  return {code, name:s.name, r:s.cur.r, f:s.cur.f, dr:s.d10.dr, df:s.d10.df, level:s.goal.level, goal:s.goal};
+}
+
+function applyFilters(){
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const onLevels = Array.from(document.querySelectorAll('.chip.on')).map(c=>c.dataset.lvl);
+  const sortVal = document.getElementById('sort').value;
+  let rows = codes.map(stateRow).filter(r=>onLevels.includes(r.level) && (r.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q)));
+  const sorters = {
+    renew_desc: (a,b)=>b.r-a.r,
+    renew_change_desc: (a,b)=>b.dr-a.dr,
+    fossil_change_desc: (a,b)=>a.df-b.df,
+    fossil_desc: (a,b)=>b.f-a.f,
+    az: (a,b)=>a.name.localeCompare(b.name),
+  };
+  rows.sort(sorters[sortVal]);
+  document.getElementById('count').textContent = `${rows.length} of ${codes.length} states`;
+  return rows;
+}
+
+function renderGallery(){
+  const rows = applyFilters();
+  const host = document.getElementById('gallery');
+  host.innerHTML = '';
+  Object.values(cardCharts).forEach(ch=>ch.destroy());
+  for (const k in cardCharts) delete cardCharts[k];
+
+  rows.forEach(r=>{
+    const s = DATA.states[r.code];
+    const card = document.createElement('div');
+    card.className='card';
+    const drCls = r.dr>=0 ? 'up' : 'down';
+    const dfCls = r.df<=0 ? 'up' : 'down';
+    card.innerHTML = `
+      <div class="card-top">
+        <div><h3>${s.name}</h3><span class="code">${r.code} · ${s.cur.year}</span></div>
+        <span class="badge ${r.level}">${LEVEL_LABEL[r.level]}</span>
+      </div>
+      <div class="chartbox"><canvas id="c_${r.code}"></canvas></div>
+      <div class="stats">
+        <div class="stat fossil">Fossil<b>${r.f}%</b></div>
+        <div class="stat renew">Renewable<b>${r.r}%</b></div>
+      </div>
+      <div class="delta">Since ${s.d10.from_year}: renewable <b class="${drCls}">${r.dr>=0?'+':''}${r.dr} pts</b>, fossil <b class="${dfCls}">${r.df>=0?'+':''}${r.df} pts</b></div>
+      <div class="goal-txt">${s.goal.headline}</div>
+    `;
+    host.appendChild(card);
+  });
+
+  rows.forEach(r=>{
+    const s = DATA.states[r.code];
+    const yrs = Object.keys(s.series).sort((a,b)=>a-b);
+    const ctx = document.getElementById(`c_${r.code}`);
+    if(!ctx) return;
+    cardCharts[r.code] = new Chart(ctx, {
+      type:'line',
+      data:{labels:yrs, datasets:[
+        {data:yrs.map(y=>s.series[y].f), borderColor:'#c25b3c', pointRadius:0, borderWidth:1.6, tension:0.25},
+        {data:yrs.map(y=>s.series[y].r), borderColor:'#2f8f5b', pointRadius:0, borderWidth:1.6, tension:0.25},
+      ]},
+      options:{responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{display:false}, tooltip:{enabled:true, callbacks:{title:c=>c[0].label}}},
+        scales:{x:{display:false}, y:{display:false, min:0, max:100}}}
+    });
+  });
+}
+
+let gridInstance = null;
+function renderRankings(){
+  const rows = applyFilters();
+  const host = document.getElementById('gridjs-host');
+  host.innerHTML = '';
+  gridInstance = new gridjs.Grid({
+    columns:[
+      {name:'State'},
+      {name:'2024 Renewable %'},
+      {name:'2024 Fossil %'},
+      {name:'10yr Δ Renewable (pts)'},
+      {name:'10yr Δ Fossil (pts)'},
+      {name:'Goal status'},
+    ],
+    data: rows.map(r=>[r.name, r.r+'%', r.f+'%', (r.dr>=0?'+':'')+r.dr, (r.df>=0?'+':'')+r.df, LEVEL_LABEL[r.level]]),
+    sort:true, search:false, pagination:{limit:20}, className:{table:'gj-table'}
+  }).render(host);
+}
+
+function renderActive(){
+  const activeTab = document.querySelector('.tab.active').dataset.tab;
+  if(activeTab==='gallery') renderGallery(); else renderRankings();
+}
+
+document.getElementById('search').addEventListener('input', renderActive);
+document.getElementById('sort').addEventListener('change', renderActive);
+document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click', ()=>{c.classList.toggle('on'); renderActive();}));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('gallery').style.display = t.dataset.tab==='gallery' ? 'grid' : 'none';
+  document.getElementById('rankings').style.display = t.dataset.tab==='rankings' ? 'block' : 'none';
+  renderActive();
+}));
+
+renderGallery();
+</script>
+</body>
+</html>
