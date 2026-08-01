@@ -40,7 +40,13 @@ Run this whenever the tracker artifact needs refreshing. It:
      wild growth rate off a low base (a single plant coming online or
      retiring) is visible rather than silently compounding into an
      implausible 2032 total.
-  9. Renders the self-contained artifact.html in this same folder.
+  9. Runs verify_national_reconciliation() as a fourth build-time guard:
+     independently recomputes the generation-weighted national line from
+     the state series (actual and forecast years alike) and asserts it
+     matches site_data['national'] exactly — proves structurally that the
+     national chart is a pure rollup of the state forecasts, never a
+     separate national-level fit.
+  10. Renders the self-contained artifact.html in this same folder.
 
 After running this script, read artifact.html back and pass it to
 mcp__cowork__update_artifact with id "state-power-transition-tracker".
@@ -520,6 +526,46 @@ def verify_total_generation(gen, site_data, target_years):
               f"implied national total-generation CAGR {national_cagr*100:.2f}%/yr through {target_years[-1]}.")
 
 
+def verify_national_reconciliation(site_data):
+    """Regression guard for Step 7: the national line must be nothing more
+    than a weighted rollup of the state forecasts — no separate national-
+    level curve fit exists, and this proves it structurally rather than by
+    code inspection. Independently recomputes the generation-weighted
+    national fossil/renewable/nuclear share for every year (actual and
+    forecast alike) straight from site_data['states'][*]['series'], using
+    the exact same weighting rule (each state's share times its own total
+    MWh) as build_site_data()'s 'nat' loop, and asserts the two match. If a
+    future change ever introduces a second, divergent way of computing the
+    national number — a cached copy taken before the forecast merge, a
+    shortcut that reads only actual years, a separate fit — this fails
+    instead of quietly shipping a national line that doesn't reconcile with
+    the state cards underneath it.
+    """
+    mismatches = []
+    for year, reported in site_data['national'].items():
+        tot = fos = ren = nuc = 0.0
+        for s in site_data['states'].values():
+            row = s['series'].get(year)
+            if row:
+                t = row['t']
+                tot += t
+                fos += t * row['f'] / 100
+                ren += t * row['r'] / 100
+                nuc += t * row['n'] / 100
+        if not tot:
+            continue
+        recomputed = {'f': round(fos / tot * 1000) / 10, 'r': round(ren / tot * 1000) / 10, 'n': round(nuc / tot * 1000) / 10}
+        if recomputed != reported:
+            mismatches.append(f"{year}: reported={reported} recomputed={recomputed}")
+    if mismatches:
+        raise AssertionError("National aggregate doesn't reconcile with state series:\n  " + "\n  ".join(mismatches))
+
+    forecast_years = [y for y, s in next(iter(site_data['states'].values()))['series'].items() if s.get('p')]
+    print(f"  national-reconciliation check passed — national line for all {len(site_data['national'])} years "
+          f"(including all {len(forecast_years)} forecast years) is a pure weighted rollup of the state series, "
+          f"no independent national-level fit.")
+
+
 def summarize_forecast_confidence(site_data):
     """Step 5 visibility: print which states got a real logistic fit versus
     which fell back to the conservative linear projection, so a no-signal
@@ -584,6 +630,7 @@ def main():
     verify_forecast_bounds(site_data)
     target_years = list(range(site_data['meta']['lastDataYear'] + 1, FORECAST_THROUGH_YEAR + 1))
     verify_total_generation(gen, site_data, target_years)
+    verify_national_reconciliation(site_data)
     summarize_forecast_confidence(site_data)
     out_path = render_html(site_data)
     print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']} "
