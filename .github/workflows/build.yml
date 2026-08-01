@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install pandas xlrd openpyxl
+      - run: pip install pandas xlrd openpyxl scipy numpy
 
       - run: python3 build_tracker.py
 
