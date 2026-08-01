@@ -63,6 +63,10 @@ h1{font-size:26px;margin:0 0 6px;letter-spacing:-0.01em}
 .delta b.up{color:var(--renew)}
 .delta b.down{color:var(--fossil)}
 .goal-txt{font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
+.forecast-txt{font-size:11.5px;color:var(--muted);padding-top:6px;margin-top:2px}
+.forecast-txt b{color:var(--ink)}
+.forecast-note{font-size:12px;color:var(--muted);margin:8px 0 0}
+.sw.dashed{background:none;border-top:2px dashed var(--muted);width:14px;height:0;border-radius:0}
 #rankings{display:none}
 #gridjs-host{font-size:13px}
 .lvl-pill{font-size:10.5px;padding:2px 8px;border-radius:20px;color:#fff;font-weight:600}
@@ -85,7 +89,9 @@ a{color:var(--accent)}
       <span><i class="sw" style="background:var(--fossil)"></i>Fossil</span>
       <span><i class="sw" style="background:var(--renew)"></i>Renewable</span>
       <span><i class="sw" style="background:var(--nuke)"></i>Nuclear</span>
+      <span><i class="sw dashed"></i>Forecast (modeled, not EIA data)</span>
     </div>
+    <p class="forecast-note" id="forecastNote"></p>
   </div>
 
   <div class="tabs">
@@ -115,6 +121,7 @@ a{color:var(--accent)}
   <footer>
     <p><b>Generation data:</b> U.S. Energy Information Administration, Net Generation by State by Type of Producer by Energy Source, 1990–2024 (Total Electric Power Industry). Released September 2025; next EIA release expected October 2026. Fossil = coal, natural gas, petroleum, other gases. Renewable = conventional hydroelectric, wind, solar thermal/PV, geothermal, wood and other biomass. Nuclear tracked separately as carbon-free but not renewable.</p>
     <p><b>Goal status:</b> compiled from NCSL's state RPS/CES brief and state statutes; cross-checked against DSIRE and Environment America's 100%-clean-electricity tracking as of mid-2026. "Mandatory 100%" = a binding statute requiring 100% renewable or carbon-free electricity by a stated year. "Partial RPS/CES" = a binding standard below 100%. "Voluntary goal" = a stated but non-binding target. "No goal" = no RPS, CES, or clean-energy goal currently in statute.</p>
+    <p><b>Forecast (dashed, through 2032):</b> modeled, not EIA data. Each state's renewable-share forecast is a logistic (S-curve) fit to that state's own actual history where the trend supports it — the ceiling, steepness, and inflection year all come from the data, never from a state's legal mandate. States without a stable curve fall back to a bounded linear projection instead of a fabricated curve. Nuclear share uses a damped historical trend; fossil share is always the remainder. A state's forecast can and sometimes does fall short of its own legal mandate — that is a finding, not an error.</p>
     <p id="genline">Page generated —</p>
   </footer>
 </div>
@@ -122,11 +129,67 @@ a{color:var(--accent)}
 <script>
 const DATA = __DATA_JSON__;
 const LEVEL_LABEL = {'mandatory-100':'100% mandate','mandatory-partial':'Partial RPS/CES','voluntary':'Voluntary goal','none':'No goal'};
+const LAST_ACTUAL_YEAR = DATA.meta.lastDataYear;
+const FORECAST_THROUGH = DATA.meta.forecastThrough;
+const HAS_FORECAST = !!FORECAST_THROUGH;
 
-document.getElementById('freshtext').textContent =
-  `EIA data through ${DATA.meta.lastDataYear} (released ${DATA.meta.released}; next release ${DATA.meta.nextRelease})`;
+document.getElementById('freshtext').textContent = HAS_FORECAST
+  ? `EIA data through ${LAST_ACTUAL_YEAR} (released ${DATA.meta.released}; next release ${DATA.meta.nextRelease}) · forecast modeled through ${FORECAST_THROUGH}`
+  : `EIA data through ${LAST_ACTUAL_YEAR} (released ${DATA.meta.released}; next release ${DATA.meta.nextRelease})`;
 document.getElementById('genline').textContent =
   `Page generated ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}. This page refreshes on a recurring schedule as new EIA data and state legislative changes become available.`;
+if (HAS_FORECAST && DATA.meta.forecastConfidence) {
+  const fc = DATA.meta.forecastConfidence;
+  document.getElementById('forecastNote').textContent =
+    `Forecast basis: ${fc.logistic || 0} states have a stable S-curve fit to their own history; ` +
+    `${fc.linear_fallback || 0} states have limited trend signal and use a conservative linear projection instead.`;
+}
+
+// A segment is "forecast" if its right-hand endpoint falls after the last
+// actual year — draws the line solid through actual data and dashed for
+// every segment that touches a projected year. `labels` is whatever year
+// array a given chart uses (national years, or one state's series years).
+function forecastSegment(labels){
+  return {
+    borderDash: ctx => (HAS_FORECAST && Number(labels[ctx.p1DataIndex]) > LAST_ACTUAL_YEAR) ? [6,4] : undefined,
+    backgroundColor: ctx => {
+      if(!HAS_FORECAST || Number(labels[ctx.p1DataIndex]) <= LAST_ACTUAL_YEAR) return undefined;
+      const base = ctx.chart.data.datasets[ctx.datasetIndex].backgroundColor;
+      return base; // area fill unchanged; dash on the border is the primary cue
+    },
+  };
+}
+
+// Draws a subtle vertical marker at the actual/forecast boundary on every
+// chart that includes one — registered once, applies to all Chart.js
+// instances on the page (national + every state card).
+const forecastBoundaryPlugin = {
+  id: 'forecastBoundary',
+  afterDatasetsDraw(chart){
+    if(!HAS_FORECAST) return;
+    const idx = chart.data.labels.indexOf(String(LAST_ACTUAL_YEAR));
+    if(idx === -1) return;
+    const xScale = chart.scales.x;
+    if(!xScale) return;
+    const x = xScale.getPixelForValue(idx);
+    const {top, bottom} = chart.chartArea;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([3,3]);
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.strokeStyle = 'rgba(31,45,61,0.3)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+Chart.register(forecastBoundaryPlugin);
+
+function withForecastNote(label, year){
+  return (HAS_FORECAST && Number(year) > LAST_ACTUAL_YEAR) ? `${label} (projected)` : label;
+}
 
 // ---------- national overview chart ----------
 const natYears = Object.keys(DATA.national).sort((a,b)=>a-b);
@@ -135,14 +198,17 @@ new Chart(document.getElementById('natChart'), {
   data:{
     labels: natYears,
     datasets:[
-      {label:'Fossil', data: natYears.map(y=>DATA.national[y].f), borderColor:'#c25b3c', backgroundColor:'#c25b3c22', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
-      {label:'Renewable', data: natYears.map(y=>DATA.national[y].r), borderColor:'#2f8f5b', backgroundColor:'#2f8f5b22', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
-      {label:'Nuclear', data: natYears.map(y=>DATA.national[y].n), borderColor:'#6b7280', backgroundColor:'#6b728022', fill:true, tension:0.25, pointRadius:0, borderWidth:2},
+      {label:'Fossil', data: natYears.map(y=>DATA.national[y].f), borderColor:'#c25b3c', backgroundColor:'#c25b3c22', fill:true, tension:0.25, pointRadius:0, borderWidth:2, segment:forecastSegment(natYears)},
+      {label:'Renewable', data: natYears.map(y=>DATA.national[y].r), borderColor:'#2f8f5b', backgroundColor:'#2f8f5b22', fill:true, tension:0.25, pointRadius:0, borderWidth:2, segment:forecastSegment(natYears)},
+      {label:'Nuclear', data: natYears.map(y=>DATA.national[y].n), borderColor:'#6b7280', backgroundColor:'#6b728022', fill:true, tension:0.25, pointRadius:0, borderWidth:2, segment:forecastSegment(natYears)},
     ]
   },
   options:{
     responsive:true, maintainAspectRatio:false,
-    plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y}%`}}},
+    plugins:{legend:{display:false}, tooltip:{callbacks:{
+      title:c=>withForecastNote(c[0].label, c[0].label),
+      label:c=>`${c.dataset.label}: ${c.parsed.y}%`,
+    }}},
     scales:{ y:{min:0, max:70, ticks:{callback:v=>v+'%'}}, x:{ticks:{maxRotation:0, autoSkip:true, maxTicksLimit:10}} }
   }
 });
@@ -198,6 +264,7 @@ function renderGallery(){
       </div>
       <div class="delta">Since ${s.d10.from_year}: renewable <b class="${drCls}">${r.dr>=0?'+':''}${r.dr} pts</b>, fossil <b class="${dfCls}">${r.df>=0?'+':''}${r.df} pts</b></div>
       <div class="goal-txt">${s.goal.headline}</div>
+      ${s.forecast ? `<div class="forecast-txt"><b>Forecast to ${FORECAST_THROUGH}:</b> ${s.forecast.summary}</div>` : ''}
     `;
     host.appendChild(card);
   });
@@ -210,11 +277,23 @@ function renderGallery(){
     cardCharts[r.code] = new Chart(ctx, {
       type:'line',
       data:{labels:yrs, datasets:[
-        {data:yrs.map(y=>s.series[y].f), borderColor:'#c25b3c', pointRadius:0, borderWidth:1.6, tension:0.25},
-        {data:yrs.map(y=>s.series[y].r), borderColor:'#2f8f5b', pointRadius:0, borderWidth:1.6, tension:0.25},
+        {label:'Fossil', data:yrs.map(y=>s.series[y].f), borderColor:'#c25b3c', pointRadius:0, borderWidth:1.6, tension:0.25, segment:forecastSegment(yrs)},
+        {label:'Renewable', data:yrs.map(y=>s.series[y].r), borderColor:'#2f8f5b', pointRadius:0, borderWidth:1.6, tension:0.25, segment:forecastSegment(yrs)},
       ]},
       options:{responsive:true, maintainAspectRatio:false,
-        plugins:{legend:{display:false}, tooltip:{enabled:true, callbacks:{title:c=>c[0].label}}},
+        plugins:{legend:{display:false}, tooltip:{enabled:true, callbacks:{
+          title:c=>withForecastNote(c[0].label, c[0].label),
+          label:c=>`${c.dataset.label}: ${c.parsed.y}%`,
+          afterBody:c=>{
+            const yr = c[0] && c[0].label;
+            if(s.forecast && HAS_FORECAST && Number(yr) > LAST_ACTUAL_YEAR){
+              if(s.forecast.lowConfidence) return 'Limited trend data — linear projection';
+              if(s.forecast.ceilingUnresolved) return 'S-curve fit — still accelerating, long-run ceiling not yet determinable';
+              return `S-curve fit — ceiling ≈${s.forecast.ceiling}%`;
+            }
+            return '';
+          },
+        }}},
         scales:{x:{display:false}, y:{display:false, min:0, max:100}}}
     });
   });
@@ -228,8 +307,8 @@ function renderRankings(){
   gridInstance = new gridjs.Grid({
     columns:[
       {name:'State'},
-      {name:'2024 Renewable %'},
-      {name:'2024 Fossil %'},
+      {name:`${LAST_ACTUAL_YEAR} Renewable %`},
+      {name:`${LAST_ACTUAL_YEAR} Fossil %`},
       {name:'10yr Δ Renewable (pts)'},
       {name:'10yr Δ Fossil (pts)'},
       {name:'Goal status'},
