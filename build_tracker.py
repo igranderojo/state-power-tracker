@@ -16,7 +16,7 @@ Run this whenever the tracker artifact needs refreshing. It:
   4. Merges in state_goals.json (hand-curated RPS/CES/100%-mandate status —
      edit that file directly if a state's law changes; this script does not
      rewrite it).
-  5. Forecasts each state's renewable share out to 2032 by fitting a logistic
+  5. Forecasts each state's renewable share out to 2040 by fitting a logistic
      (S-curve) to that state's own actual history — the ceiling, steepness,
      and inflection year all come from the data. A state's legal mandate
      (from state_goals.json) never bends the fit; if a state's actual
@@ -39,7 +39,7 @@ Run this whenever the tracker artifact needs refreshing. It:
      the cap plus the resulting implied national CAGR, so a state with a
      wild growth rate off a low base (a single plant coming online or
      retiring) is visible rather than silently compounding into an
-     implausible 2032 total.
+     implausible 2040 total.
   9. Runs verify_national_reconciliation() as a fourth build-time guard:
      independently recomputes the generation-weighted national line from
      the state series (actual and forecast years alike) and asserts it
@@ -61,7 +61,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 XLS_URL = "https://www.eia.gov/electricity/data/state/annual_generation_state.xls"
 XLS_MONTHLY_URL = "https://www.eia.gov/electricity/data/state/generation_monthly.xlsx"
-FORECAST_THROUGH_YEAR = 2032
+FORECAST_THROUGH_YEAR = 2040
 
 STATE_NAMES = {
  'AL':'Alabama','AK':'Alaska','AZ':'Arizona','AR':'Arkansas','CA':'California','CO':'Colorado',
@@ -264,7 +264,7 @@ MAX_ANNUAL_GENERATION_GROWTH = 0.05  # +/-5%/year cap on a state's total-MWh CAG
 def forecast_total_generation(years, totals, target_years, max_annual_growth=MAX_ANNUAL_GENERATION_GROWTH):
     """Project each state's total MWh using its own historical CAGR over the
     last 10 actual years, capped at +/-5%/year so a short noisy run of years
-    can't compound into an implausible total by 2032. A small state's total
+    can't compound into an implausible total by the forecast horizon. A small state's total
     generation can swing double digits in percentage terms off a low base
     (a single plant coming online or retiring) — the cap exists specifically
     for those cases, not because a genuine +/-5%/year trend is expected
@@ -283,8 +283,8 @@ def forecast_total_generation(years, totals, target_years, max_annual_growth=MAX
 
 
 def build_state_forecast(years_dict, target_years):
-    """Build the 2026-2032 (or whatever target_years is) forecast for one
-    state. Returns (forecast_series, fit_meta):
+    """Build the forecast (2026 through FORECAST_THROUGH_YEAR, or whatever
+    target_years is) for one state. Returns (forecast_series, fit_meta):
       forecast_series: {year_str: {'t','f','r','n','p':True}}
       fit_meta: {'method', 'lowConfidence', 'summary', + method-specific detail}
         logistic:        + 'ceiling', 'k', 't0', 'r2'
