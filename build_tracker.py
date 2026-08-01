@@ -455,6 +455,29 @@ def verify_forecast_bounds(site_data):
           f"with every share in [0, 100].")
 
 
+def summarize_forecast_confidence(site_data):
+    """Step 5 visibility: print which states got a real logistic fit versus
+    which fell back to the conservative linear projection, so a no-signal
+    state (flat/noisy renewable share — a hydro-heavy state's year-to-year
+    swings, or a state that just hasn't started its ramp yet) is visible in
+    the build log itself, not only as a buried 'lowConfidence' flag in the
+    JSON that a reader would have to go looking for.
+    """
+    logistic_states, fallback_states = [], []
+    for code, s in site_data['states'].items():
+        fc = s.get('forecast')
+        if not fc:
+            continue
+        if fc['method'] == 'logistic':
+            logistic_states.append(f"{code} (ceiling {fc['ceiling']}%, R² {fc['r2']})")
+        else:
+            fallback_states.append(code)
+    print(f"  forecast confidence: {len(logistic_states)} states got a converged logistic S-curve "
+          f"(R² ≥ {MIN_LOGISTIC_R2}); {len(fallback_states)} states had no stable curvature "
+          f"signal and fell back to a bounded linear trend, flagged low-confidence:")
+    print(f"    low-confidence (linear fallback): {', '.join(sorted(fallback_states))}")
+
+
 HTML_TEMPLATE_PATH = HERE / 'template.html'
 
 
@@ -494,6 +517,7 @@ def main():
 
     site_data = build_site_data(gen, goals, last_annual_final_year, prelim_years)
     verify_forecast_bounds(site_data)
+    summarize_forecast_confidence(site_data)
     out_path = render_html(site_data)
     print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']} "
           f"(annual Final through {last_annual_final_year}; preliminary: {', '.join(prelim_years) or 'none'}), "
