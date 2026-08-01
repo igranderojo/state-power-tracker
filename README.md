@@ -8,7 +8,7 @@ carbon/clean-energy goal status (RPS, CES, or a binding 100% mandate).
 
 ## Files
 - `build_tracker.py` — full pipeline: downloads the EIA annual and monthly
-  workbooks, recomputes shares, forecasts 2026-2032, merges `state_goals.json`,
+  workbooks, recomputes shares, forecasts 2026-2040, merges `state_goals.json`,
   renders `artifact.html`.
 - `template.html` — the artifact's HTML/CSS/JS shell, with a `__DATA_JSON__`
   placeholder `build_tracker.py` fills in.
@@ -47,7 +47,7 @@ carbon/clean-energy goal status (RPS, CES, or a binding 100% mandate).
   checked against DSIRE and Environment America's 100%-clean-electricity
   tracking.
 
-## Forecast methodology (2026-2032)
+## Forecast methodology (2026-2040)
 
 Each state's renewable-share forecast is a **logistic (S-curve) fit to that
 state's own actual history** — `renewable_share(t) = L / (1 + e^(-k(t-t0)))`,
@@ -83,7 +83,7 @@ number isn't really pinned down by the data. `build_state_forecast()` flags
 this as `ceilingUnresolved: true` when the fitted ceiling lands at ≥99.9%,
 and the summary text says so explicitly rather than presenting an
 unsupported round number with false confidence. The near-term forecast
-values (through 2032) are still the same R²-validated extrapolation of the
+values (through the forecast horizon) are still the same R²-validated extrapolation of the
 recent trend either way — only the long-run ceiling claim is unreliable in
 this case.
 
@@ -97,7 +97,7 @@ ever sum past 100 (this has not actually triggered for any state to date).
 **Total generation** is projected per state from its own 10-year CAGR,
 capped at ±5%/year so a low-base state (a single plant coming online or
 retiring can look like a huge percentage swing) can't compound into an
-implausible 2032 total. The national chart is a pure weighted rollup of the
+implausible total by the forecast horizon. The national chart is a pure weighted rollup of the
 51 state forecasts — there is no separate national-level fit — and
 `verify_national_reconciliation()` proves that structurally on every build
 by recomputing the national line independently and asserting it matches.
