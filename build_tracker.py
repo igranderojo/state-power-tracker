@@ -286,11 +286,17 @@ def build_state_forecast(years_dict, target_years):
     """Build the 2026-2032 (or whatever target_years is) forecast for one
     state. Returns (forecast_series, fit_meta):
       forecast_series: {year_str: {'t','f','r','n','p':True}}
-      fit_meta: {'method','lowConfidence', + ceiling/k/t0/r2 if logistic}
+      fit_meta: {'method', 'lowConfidence', 'summary', + method-specific detail}
+        logistic:        + 'ceiling', 'k', 't0', 'r2'
+        linear_fallback: + 'slope' (pts/year), 'attemptedR2' (the logistic
+                            attempt's R² if it converged but missed the
+                            threshold, else None if it didn't converge at all)
 
     Renewable share drives the fit; nuclear gets its own damped trend;
     fossil is whatever's left over (100 - renewable - nuclear, clipped).
     state_goals.json is never consulted here — see module docstring.
+    'summary' is a ready-to-render tooltip string (Step 9 just displays it)
+    so the schema, not the template, owns the wording of what the fit means.
     """
     yrs_sorted = sorted(years_dict.keys(), key=int)
     yrs_int = [int(y) for y in yrs_sorted]
@@ -301,14 +307,28 @@ def build_state_forecast(years_dict, target_years):
     fit = fit_logistic_share(yrs_int, r_vals)
     if fit.get('converged') and fit.get('r2', 0.0) >= MIN_LOGISTIC_R2:
         r_forecast = {ty: max(0.0, min(100.0, _logistic(ty, fit['L'], fit['k'], fit['t0']))) for ty in target_years}
+        ceiling = round(fit['L'], 1)
         fit_meta = {
             'method': 'logistic', 'lowConfidence': False,
-            'ceiling': round(fit['L'], 1), 'k': round(fit['k'], 3),
+            'ceiling': ceiling, 'k': round(fit['k'], 3),
             't0': round(fit['t0'], 1), 'r2': round(fit['r2'], 3),
+            'summary': f"S-curve fit to actual history — renewable share trending toward "
+                       f"roughly {ceiling}% (fit ceiling, not the legal mandate).",
         }
     else:
         r_forecast = linear_fallback(yrs_int, r_vals, target_years)
-        fit_meta = {'method': 'linear_fallback', 'lowConfidence': True}
+        n_recent = min(10, len(yrs_int))
+        import numpy as np
+        slope = float(np.polyfit(np.array(yrs_int[-n_recent:], dtype=float),
+                                  np.array(r_vals[-n_recent:], dtype=float), 1)[0]) if n_recent >= 2 else 0.0
+        attempted_r2 = round(fit['r2'], 3) if fit.get('converged') else None
+        direction = "rising" if slope > 0.05 else ("declining" if slope < -0.05 else "roughly flat")
+        fit_meta = {
+            'method': 'linear_fallback', 'lowConfidence': True,
+            'slope': round(slope, 2), 'attemptedR2': attempted_r2,
+            'summary': f"Limited trend signal — no stable S-curve in the actual history "
+                       f"(renewable share {direction} recently); projected as a bounded linear trend.",
+        }
 
     n_forecast = forecast_nuclear_share(yrs_int, n_vals, target_years)
     t_forecast = forecast_total_generation(yrs_int, t_vals, target_years)
@@ -388,12 +408,18 @@ def build_site_data(gen, goals, last_annual_final_year, prelim_years=(), forecas
     # preliminary monthly data, not yet the finalized annual release.
     released = f"September {last_annual_final_year + 1}"
     next_release = f"October {last_annual_final_year + 2}"
+    forecast_confidence = {'logistic': 0, 'linear_fallback': 0}
+    for s in combined.values():
+        fc = s.get('forecast')
+        if fc:
+            forecast_confidence[fc['method']] = forecast_confidence.get(fc['method'], 0) + 1
     return {
         'meta': {
             'lastDataYear': last_actual_data_year,
             'lastAnnualFinalYear': last_annual_final_year,
             'prelimYears': sorted(prelim_years, key=int),
             'forecastThrough': forecast_through if target_years else None,
+            'forecastConfidence': forecast_confidence if target_years else None,
             'forecastMethod': 'Logistic (S-curve) fit per state on actual renewable-share history; '
                                'ceiling, steepness, and inflection year are all data-derived, not tied to '
                                'any state\'s legal RPS/CES mandate. Nuclear share uses a damped historical '
