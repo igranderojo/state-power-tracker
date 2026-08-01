@@ -191,6 +191,22 @@ function withForecastNote(label, year){
   return (HAS_FORECAST && Number(year) > LAST_ACTUAL_YEAR) ? `${label} (projected)` : label;
 }
 
+// Chart.js's autoSkip+maxTicksLimit combination doesn't guarantee the last
+// label survives the thinning — on a long axis (2001 through the forecast
+// horizon) it was dropping the actual end year entirely. This always shows
+// the first and last year, plus roughly 8 evenly-spaced years in between,
+// so the axis reads cleanly at any horizon length without ever hiding the
+// year the forecast actually ends on.
+function evenlySpacedYearTicks(labels){
+  const targetCount = 8;
+  const step = Math.max(1, Math.round(labels.length / targetCount));
+  return (value, index) => {
+    const isFirst = index === 0;
+    const isLast = index === labels.length - 1;
+    return (isFirst || isLast || index % step === 0) ? labels[index] : '';
+  };
+}
+
 // ---------- national overview chart ----------
 const natYears = Object.keys(DATA.national).sort((a,b)=>a-b);
 new Chart(document.getElementById('natChart'), {
@@ -209,7 +225,7 @@ new Chart(document.getElementById('natChart'), {
       title:c=>withForecastNote(c[0].label, c[0].label),
       label:c=>`${c.dataset.label}: ${c.parsed.y}%`,
     }}},
-    scales:{ y:{min:0, max:70, ticks:{callback:v=>v+'%'}}, x:{ticks:{maxRotation:0, autoSkip:true, maxTicksLimit:10}} }
+    scales:{ y:{min:0, max:70, ticks:{callback:v=>v+'%'}}, x:{ticks:{maxRotation:0, autoSkip:false, callback:evenlySpacedYearTicks(natYears)}} }
   }
 });
 
