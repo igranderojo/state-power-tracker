@@ -308,12 +308,33 @@ def build_state_forecast(years_dict, target_years):
     if fit.get('converged') and fit.get('r2', 0.0) >= MIN_LOGISTIC_R2:
         r_forecast = {ty: max(0.0, min(100.0, _logistic(ty, fit['L'], fit['k'], fit['t0']))) for ty in target_years}
         ceiling = round(fit['L'], 1)
+        # A state still deep in its rise, with no plateau yet visible in the
+        # actual history, is under-determined: curve_fit can't distinguish
+        # "will level off at 55%" from "will level off at 100%" without
+        # having seen the bend, so the optimizer drifts to whichever edge of
+        # its search box fits best — which is L's upper bound, 100. That
+        # shows up as ceiling landing suspiciously exactly at 100.0 (not 97.3,
+        # not 101-clipped-to-100 — exactly on the box edge) regardless of
+        # the state. This is a genuine fit-identifiability limit, not goals
+        # leaking in (verify_goals_isolation() already proves that
+        # structurally) — but the near-term forecast years are still a
+        # legitimate, R²-validated extrapolation of the recent trend even
+        # when the long-run ceiling itself isn't actually pinned down yet.
+        ceiling_unresolved = ceiling >= 99.9
+        if ceiling_unresolved:
+            summary = ("S-curve fit to actual history — renewable share still accelerating with no "
+                       "plateau yet visible in the data; near-term trend (through the forecast horizon) "
+                       "is data-supported, but the long-run ceiling isn't yet determinable — not the "
+                       "legal mandate either way.")
+        else:
+            summary = (f"S-curve fit to actual history — renewable share trending toward "
+                       f"roughly {ceiling}% (fit ceiling, not the legal mandate).")
         fit_meta = {
             'method': 'logistic', 'lowConfidence': False,
             'ceiling': ceiling, 'k': round(fit['k'], 3),
             't0': round(fit['t0'], 1), 'r2': round(fit['r2'], 3),
-            'summary': f"S-curve fit to actual history — renewable share trending toward "
-                       f"roughly {ceiling}% (fit ceiling, not the legal mandate).",
+            'ceilingUnresolved': ceiling_unresolved,
+            'summary': summary,
         }
     else:
         r_forecast = linear_fallback(yrs_int, r_vals, target_years)
