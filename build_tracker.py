@@ -3,13 +3,20 @@ State Power Transition Tracker — full rebuild pipeline.
 
 Run this whenever the tracker artifact needs refreshing. It:
   1. Downloads the latest EIA "Net Generation by State by Type of Producer
-     by Energy Source" workbook (no API key required).
-  2. Recomputes each state's fossil / renewable / nuclear generation share
+     by Energy Source" annual workbook (no API key required) — final data,
+     currently through 2024.
+  2. Downloads EIA's companion monthly workbook (also no API key) and, for
+     any full calendar year not yet covered by the annual "Final" release
+     (currently 2025), rolls up all twelve months into a real annual actual
+     per state. This is EIA's own preliminary monthly data, not a modeled
+     estimate — it gets merged in as an actual year, flagged 'prelim' so the
+     footer/tooltips can note it isn't the finalized EIA-923 figure yet.
+  3. Recomputes each state's fossil / renewable / nuclear generation share
      for every available year.
-  3. Merges in state_goals.json (hand-curated RPS/CES/100%-mandate status —
+  4. Merges in state_goals.json (hand-curated RPS/CES/100%-mandate status —
      edit that file directly if a state's law changes; this script does not
      rewrite it).
-  4. Renders the self-contained artifact.html in this same folder.
+  5. Renders the self-contained artifact.html in this same folder.
 
 After running this script, read artifact.html back and pass it to
 mcp__cowork__update_artifact with id "state-power-transition-tracker".
@@ -23,6 +30,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 XLS_URL = "https://www.eia.gov/electricity/data/state/annual_generation_state.xls"
+XLS_MONTHLY_URL = "https://www.eia.gov/electricity/data/state/generation_monthly.xlsx"
 
 STATE_NAMES = {
  'AL':'Alabama','AK':'Alaska','AZ':'Arizona','AR':'Arkansas','CA':'California','CO':'Colorado',
@@ -45,6 +53,56 @@ def fetch_xls():
     dest = HERE / 'gen_state.xlsx'
     subprocess.run(['curl', '-sL', '-o', str(dest), XLS_URL, '-A', 'Mozilla/5.0'], check=True)
     return dest
+
+
+def fetch_monthly_xls():
+    dest = HERE / 'gen_state_monthly.xlsx'
+    subprocess.run(['curl', '-sL', '-o', str(dest), XLS_MONTHLY_URL, '-A', 'Mozilla/5.0'], check=True)
+    return dest
+
+
+def process_monthly_rollup(xlsx_path, year):
+    """Roll up EIA's monthly workbook into a real annual actual for `year`.
+
+    Returns a dict {state_code: {'t','f','r','n'}} — same shape as one year's
+    entry from process_generation() — or None if the sheet for `year` isn't
+    present, or all twelve months aren't yet posted (a partial year must
+    never be merged in as if it were a full-year actual).
+    """
+    import pandas as pd
+
+    sheet_candidates = [f'{year}_Preliminary', f'{year}_Final']
+    xl = pd.ExcelFile(xlsx_path)
+    sheet = next((s for s in sheet_candidates if s in xl.sheet_names), None)
+    if sheet is None:
+        return None
+
+    df = pd.read_excel(xlsx_path, sheet_name=sheet, header=4)
+    df.columns = ['year', 'month', 'state', 'producer', 'source', 'mwh']
+    months_present = set(int(m) for m in df['month'].unique())
+    if months_present != set(range(1, 13)):
+        print(f"  monthly rollup for {year}: only {len(months_present)}/12 months posted — skipping "
+              f"(partial year, not a valid annual actual)")
+        return None
+
+    df['state'] = df['state'].astype(str).str.strip()
+    d = df[(df.producer == 'Total Electric Power Industry') & (df.state.isin(STATE_NAMES.keys()))].copy()
+
+    out = {}
+    for state, g in d.groupby('state'):
+        total = g[g.source == 'Total']['mwh'].sum()
+        if not total or total <= 0:
+            continue
+        fossil = g[g.source.isin(FOSSIL)]['mwh'].sum()
+        renew = g[g.source.isin(RENEWABLE)]['mwh'].sum()
+        nuke = g[g.source.isin(NUCLEAR)]['mwh'].sum()
+        out[state] = {
+            't': round(total),
+            'f': round(fossil / total * 1000) / 10,
+            'r': round(renew / total * 1000) / 10,
+            'n': round(nuke / total * 1000) / 10,
+        }
+    return out
 
 
 def process_generation(xls_path):
@@ -73,7 +131,8 @@ def process_generation(xls_path):
     return out
 
 
-def build_site_data(gen, goals):
+def build_site_data(gen, goals, last_annual_final_year, prelim_years=()):
+    prelim_years = set(prelim_years)
     combined = {}
     for code, g in gen.items():
         if code not in goals:
@@ -91,7 +150,8 @@ def build_site_data(gen, goals):
             'name': g['name'],
             'goal': goals[code],
             'series': {y: years[y] for y in yrs_sorted if int(y) >= 2001},
-            'cur': {'year': int(last_yr), 'f': cur['f'], 'r': cur['r'], 'n': cur['n'], 't': cur['t']},
+            'cur': {'year': int(last_yr), 'f': cur['f'], 'r': cur['r'], 'n': cur['n'], 't': cur['t'],
+                    'prelim': last_yr in prelim_years},
             'd10': {'from_year': int(prior_yr), 'df': round(cur['f'] - prior['f'], 1), 'dr': round(cur['r'] - prior['r'], 1)}
         }
 
@@ -111,13 +171,24 @@ def build_site_data(gen, goals):
             nat[y] = {'f': round(fos / tot * 1000) / 10, 'r': round(ren / tot * 1000) / 10, 'n': round(nuc / tot * 1000) / 10}
 
     last_data_year = int(years_all[-1])
-    # EIA has historically released this workbook in September, covering the
-    # prior calendar year, with the following year's edition around October.
-    released = f"September {last_data_year + 1}"
-    next_release = f"October {last_data_year + 2}"
+    # EIA has historically released the annual "Final" workbook in September,
+    # covering the prior calendar year, with the following year's edition
+    # around October. That cadence only describes last_annual_final_year —
+    # any later year merged in from the monthly rollup is EIA's own
+    # preliminary monthly data, not yet the finalized annual release.
+    released = f"September {last_annual_final_year + 1}"
+    next_release = f"October {last_annual_final_year + 2}"
     return {
-        'meta': {'lastDataYear': last_data_year, 'released': released, 'nextRelease': next_release,
-                 'source': 'EIA, Net Generation by State by Type of Producer by Energy Source (1990–present)'},
+        'meta': {
+            'lastDataYear': last_data_year,
+            'lastAnnualFinalYear': last_annual_final_year,
+            'prelimYears': sorted(prelim_years, key=int),
+            'released': released,
+            'nextRelease': next_release,
+            'source': 'EIA, Net Generation by State by Type of Producer by Energy Source (1990–present); '
+                      'years after the annual Final release are rolled up from EIA\'s monthly Electric Power '
+                      'Monthly data and are preliminary until EIA\'s next annual Final release.',
+        },
         'national': nat,
         'states': combined,
     }
@@ -137,11 +208,32 @@ def render_html(site_data):
 
 def main():
     goals = json.loads((HERE / 'state_goals.json').read_text())
+
     xls_path = fetch_xls()
     gen = process_generation(xls_path)
-    site_data = build_site_data(gen, goals)
+    last_annual_final_year = max(int(y) for s in gen.values() for y in s['years'])
+
+    # Extend with real actuals for every full calendar year after the annual
+    # "Final" release, using EIA's own monthly workbook — no forecasting yet.
+    monthly_path = fetch_monthly_xls()
+    prelim_years = []
+    candidate_year = last_annual_final_year + 1
+    while True:
+        rollup = process_monthly_rollup(monthly_path, candidate_year)
+        if rollup is None:
+            break
+        for code, row in rollup.items():
+            if code in gen:
+                gen[code]['years'][str(candidate_year)] = row
+        prelim_years.append(str(candidate_year))
+        print(f"  merged {candidate_year} actuals from EIA monthly rollup ({len(rollup)} states) — preliminary")
+        candidate_year += 1
+
+    site_data = build_site_data(gen, goals, last_annual_final_year, prelim_years)
     out_path = render_html(site_data)
-    print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']}, {len(site_data['states'])} states.")
+    print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']} "
+          f"(annual Final through {last_annual_final_year}; preliminary: {', '.join(prelim_years) or 'none'}), "
+          f"{len(site_data['states'])} states.")
 
 
 if __name__ == '__main__':
