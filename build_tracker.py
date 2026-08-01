@@ -27,7 +27,13 @@ Run this whenever the tracker artifact needs refreshing. It:
      the forecast with every state's goal swapped for a fabricated mandate
      and asserts the output doesn't change. Raises and fails the build if it
      ever does — state_goals.json must only ever drive the on-card label.
-  7. Renders the self-contained artifact.html in this same folder.
+  7. Runs verify_forecast_bounds() as a second build-time guard: every
+     projected year for every state must have fossil/renewable/nuclear each
+     in [0, 100] and summing to 100 — nuclear is forecast independently
+     (damped historical trend) and fossil is always the remainder, so this
+     confirms that dependency held for every state, not just the ones
+     spot-checked during development.
+  8. Renders the self-contained artifact.html in this same folder.
 
 After running this script, read artifact.html back and pass it to
 mcp__cowork__update_artifact with id "state-power-transition-tracker".
@@ -419,6 +425,36 @@ def verify_goals_isolation(gen, goals, last_annual_final_year, prelim_years, for
           f"regardless of state_goals.json content.")
 
 
+def verify_forecast_bounds(site_data):
+    """Regression guard for Step 4: fossil and nuclear must stay valid
+    dependents of the renewable fit in every projected year.
+
+    Checks every state's forecast (p:true) years for: each of f/r/n within
+    [0, 100], the three summing to 100 (within floating-point tolerance),
+    and — since nuclear is deliberately never itself clipped against
+    renewable — that the renewable-yields-to-nuclear cap in
+    build_state_forecast() actually kept the total at 100 rather than
+    silently drifting. Raises AssertionError with the offending
+    state/year/values if anything is out of bounds.
+    """
+    problems = []
+    for code, s in site_data['states'].items():
+        for year, row in s['series'].items():
+            if not row.get('p'):
+                continue
+            f, r, n = row['f'], row['r'], row['n']
+            total = f + r + n
+            if not (0.0 <= f <= 100.0 and 0.0 <= r <= 100.0 and 0.0 <= n <= 100.0):
+                problems.append(f"{code} {year}: out-of-range share f={f} r={r} n={n}")
+            elif abs(total - 100.0) > 0.2:
+                problems.append(f"{code} {year}: f+r+n={round(total, 2)} (expected 100)")
+    if problems:
+        raise AssertionError("Fossil/nuclear dependency check failed:\n  " + "\n  ".join(problems))
+    n_checked = sum(1 for s in site_data['states'].values() for row in s['series'].values() if row.get('p'))
+    print(f"  forecast-bounds check passed — {n_checked} projected state-years all sum to 100 "
+          f"with every share in [0, 100].")
+
+
 HTML_TEMPLATE_PATH = HERE / 'template.html'
 
 
@@ -457,6 +493,7 @@ def main():
     verify_goals_isolation(gen, goals, last_annual_final_year, prelim_years, FORECAST_THROUGH_YEAR)
 
     site_data = build_site_data(gen, goals, last_annual_final_year, prelim_years)
+    verify_forecast_bounds(site_data)
     out_path = render_html(site_data)
     print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']} "
           f"(annual Final through {last_annual_final_year}; preliminary: {', '.join(prelim_years) or 'none'}), "
