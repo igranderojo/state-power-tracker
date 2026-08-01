@@ -23,7 +23,11 @@ Run this whenever the tracker artifact needs refreshing. It:
      trajectory implies it won't reach its mandate, the forecast says so.
      States without enough curvature signal for a stable logistic fit fall
      back to a bounded linear projection and get flagged low-confidence.
-  6. Renders the self-contained artifact.html in this same folder.
+  6. Runs verify_goals_isolation() as a build-time regression guard: rebuilds
+     the forecast with every state's goal swapped for a fabricated mandate
+     and asserts the output doesn't change. Raises and fails the build if it
+     ever does — state_goals.json must only ever drive the on-card label.
+  7. Renders the self-contained artifact.html in this same folder.
 
 After running this script, read artifact.html back and pass it to
 mcp__cowork__update_artifact with id "state-power-transition-tracker".
@@ -381,6 +385,40 @@ def build_site_data(gen, goals, last_annual_final_year, prelim_years=(), forecas
     }
 
 
+def verify_goals_isolation(gen, goals, last_annual_final_year, prelim_years, forecast_through):
+    """Regression guard: state_goals.json is a label, never a forecast input.
+
+    Rebuilds site data twice from the same generation data — once with the
+    real goals, once with every state's goal swapped for a fabricated
+    100%-by-2026 mandate — and asserts every state's forecast series and fit
+    metadata come back byte-identical. build_state_forecast() and everything
+    it calls never receive `goals` as an argument, so this should always
+    hold; this check exists so a future edit that accidentally wires goals
+    into the curve fit fails the build loudly instead of silently reproducing
+    the exact defect Step 2 was written to avoid.
+    """
+    real = build_site_data(gen, goals, last_annual_final_year, prelim_years, forecast_through)
+    poisoned_goals = {
+        code: {**g, 'level': 'mandatory-100', 'headline': 'TEST MANDATE — 100% clean electricity by 2026 (not real; isolation check only)'}
+        for code, g in goals.items()
+    }
+    poisoned = build_site_data(gen, poisoned_goals, last_annual_final_year, prelim_years, forecast_through)
+
+    mismatches = []
+    for code in real['states']:
+        real_s, poisoned_s = real['states'][code], poisoned['states'][code]
+        if real_s['series'] != poisoned_s['series'] or real_s.get('forecast') != poisoned_s.get('forecast'):
+            mismatches.append(code)
+    if mismatches:
+        raise AssertionError(
+            "state_goals.json leaked into the forecast for: " + ', '.join(mismatches) +
+            " — build_state_forecast() (or something it calls) is reading goal data. "
+            "state_goals.json must only ever be used for the on-card label."
+        )
+    print(f"  goals-isolation check passed — forecast is identical for all {len(real['states'])} states "
+          f"regardless of state_goals.json content.")
+
+
 HTML_TEMPLATE_PATH = HERE / 'template.html'
 
 
@@ -415,6 +453,8 @@ def main():
         prelim_years.append(str(candidate_year))
         print(f"  merged {candidate_year} actuals from EIA monthly rollup ({len(rollup)} states) — preliminary")
         candidate_year += 1
+
+    verify_goals_isolation(gen, goals, last_annual_final_year, prelim_years, FORECAST_THROUGH_YEAR)
 
     site_data = build_site_data(gen, goals, last_annual_final_year, prelim_years)
     out_path = render_html(site_data)
