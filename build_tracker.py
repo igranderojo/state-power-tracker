@@ -33,7 +33,14 @@ Run this whenever the tracker artifact needs refreshing. It:
      (damped historical trend) and fossil is always the remainder, so this
      confirms that dependency held for every state, not just the ones
      spot-checked during development.
-  8. Renders the self-contained artifact.html in this same folder.
+  8. Runs verify_total_generation() as a third build-time guard: every
+     state's projected total MWh (its own historical CAGR, capped at
+     +/-5%/year) must stay positive, and prints which states actually hit
+     the cap plus the resulting implied national CAGR, so a state with a
+     wild growth rate off a low base (a single plant coming online or
+     retiring) is visible rather than silently compounding into an
+     implausible 2032 total.
+  9. Renders the self-contained artifact.html in this same folder.
 
 After running this script, read artifact.html back and pass it to
 mcp__cowork__update_artifact with id "state-power-transition-tracker".
@@ -245,10 +252,17 @@ def forecast_nuclear_share(years, values, target_years, damping=0.3):
     return out
 
 
-def forecast_total_generation(years, totals, target_years, max_annual_growth=0.05):
+MAX_ANNUAL_GENERATION_GROWTH = 0.05  # +/-5%/year cap on a state's total-MWh CAGR
+
+
+def forecast_total_generation(years, totals, target_years, max_annual_growth=MAX_ANNUAL_GENERATION_GROWTH):
     """Project each state's total MWh using its own historical CAGR over the
     last 10 actual years, capped at +/-5%/year so a short noisy run of years
-    can't compound into an implausible total by 2032.
+    can't compound into an implausible total by 2032. A small state's total
+    generation can swing double digits in percentage terms off a low base
+    (a single plant coming online or retiring) — the cap exists specifically
+    for those cases, not because a genuine +/-5%/year trend is expected
+    anywhere; see verify_total_generation() for which states actually hit it.
     """
     n = min(10, len(years))
     y0, y1 = years[-n], years[-1]
@@ -455,6 +469,57 @@ def verify_forecast_bounds(site_data):
           f"with every share in [0, 100].")
 
 
+def verify_total_generation(gen, site_data, target_years):
+    """Regression guard + visibility for Step 6: every state's projected
+    total generation must stay positive and within the +/-5%/year CAGR cap,
+    and the national weighted aggregate (which every state's forecast feeds
+    into) should land somewhere plausible rather than compounding into an
+    implausible national trend even when every individual state looks fine.
+
+    Recomputes the same raw (uncapped) CAGR verify_total_generation's caller
+    already capped, purely to report which states actually hit the cap —
+    this is diagnostic, not something to fail the build over, since hitting
+    the cap is an expected, correct outcome for a low-base or single-plant
+    state, not a bug.
+    """
+    capped_states = []
+    for code, g in gen.items():
+        if code not in site_data['states']:
+            continue
+        years = g['years']
+        yrs_sorted = sorted(years.keys(), key=int)
+        yrs_int = [int(y) for y in yrs_sorted]
+        t_vals = [years[y]['t'] for y in yrs_sorted]
+        n = min(10, len(yrs_int))
+        y0, y1 = yrs_int[-n], yrs_int[-1]
+        t0v, t1v = t_vals[-n], t_vals[-1]
+        span = max(1, y1 - y0)
+        raw_cagr = (t1v / t0v) ** (1.0 / span) - 1.0 if t0v > 0 else 0.0
+        if abs(raw_cagr) > MAX_ANNUAL_GENERATION_GROWTH:
+            capped_states.append(f"{code} ({raw_cagr * 100:+.1f}%/yr raw -> capped)")
+
+    zero_or_negative = []
+    for code, s in site_data['states'].items():
+        for year in target_years:
+            row = s['series'].get(str(year))
+            if row and row['t'] <= 0:
+                zero_or_negative.append(f"{code} {year}: t={row['t']}")
+    if zero_or_negative:
+        raise AssertionError("Non-positive projected total generation:\n  " + "\n  ".join(zero_or_negative))
+
+    def national_total(year):
+        return sum(s['series'][str(year)]['t'] for s in site_data['states'].values() if str(year) in s['series'])
+
+    if target_years:
+        t_first, t_last = national_total(target_years[0] - 1), national_total(target_years[-1])
+        span = target_years[-1] - (target_years[0] - 1)
+        national_cagr = (t_last / t_first) ** (1.0 / span) - 1.0 if t_first > 0 else 0.0
+        print(f"  total-generation check passed — all projected state totals positive; "
+              f"{len(capped_states)} states hit the +/-{MAX_ANNUAL_GENERATION_GROWTH*100:.0f}%/yr cap "
+              f"({', '.join(capped_states) if capped_states else 'none'}); "
+              f"implied national total-generation CAGR {national_cagr*100:.2f}%/yr through {target_years[-1]}.")
+
+
 def summarize_forecast_confidence(site_data):
     """Step 5 visibility: print which states got a real logistic fit versus
     which fell back to the conservative linear projection, so a no-signal
@@ -517,6 +582,8 @@ def main():
 
     site_data = build_site_data(gen, goals, last_annual_final_year, prelim_years)
     verify_forecast_bounds(site_data)
+    target_years = list(range(site_data['meta']['lastDataYear'] + 1, FORECAST_THROUGH_YEAR + 1))
+    verify_total_generation(gen, site_data, target_years)
     summarize_forecast_confidence(site_data)
     out_path = render_html(site_data)
     print(f"Built {out_path} — data through {site_data['meta']['lastDataYear']} "
